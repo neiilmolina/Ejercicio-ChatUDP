@@ -1,5 +1,13 @@
+import javax.crypto.BadPaddingException;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
 import java.net.*;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -14,34 +22,39 @@ public class ServidorUDP {
             System.out.println("Servidor en espera");
 
             // Mapa para almacenar los clientes conectados y sus mensajes
-            Map<InetSocketAddress, String> clientesConectados = new HashMap<>();
+            Map<InetSocketAddress, SecretKey> clientesConectados = new HashMap<>();
 
             while (true) {
                 byte[] buffer = new byte[1024];
                 DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                 // Esperar a recibir un mensaje de un cliente
                 socket.receive(packet);
-                String mensaje = new String(packet.getData(), 0, packet.getLength());
+                String mensajeCifrado = new String(packet.getData(), 0, packet.getLength());
                 // Obtener la dirección y el puerto del cliente
                 InetSocketAddress cliente = new InetSocketAddress(packet.getAddress(), packet.getPort());
 
                 // Verificar si el cliente es nuevo
                 if (!clientesConectados.containsKey(cliente)) {
-                    // Si el cliente es nuevo, agregarlo al mapa y enviar un mensaje de bienvenida a todos los clientes
-                    clientesConectados.put(cliente, mensaje);
-                    System.out.println("Nuevo cliente registrado: " + mensaje);
-                    // Notificar a todos los clientes sobre la entrada del nuevo cliente
-                    mensaje = "¡" + mensaje + " ha entrado al chat!";
-                    enviarMensajeCliente(socket, mensaje, clientesConectados);
+                    // Si el cliente es nuevo, recibir la clave AES del cliente y agregarlo al mapa
+                    SecretKey claveAES = recibirClave(socket, mensajeCifrado);
+                    clientesConectados.put(cliente, claveAES);
+                    System.out.println("Nuevo cliente registrado");
                 } else {
-                    // Si el cliente ya está registrado, retransmitir el mensaje a todos los clientes
-                    String mensajeCliente = clientesConectados.get(cliente);
-                    enviarMensajeCliente(socket, mensaje, clientesConectados);
+                    // Si el cliente ya está registrado, descifrar el mensaje recibido
+                    SecretKey claveAES = clientesConectados.get(cliente);
+                    String mensajeDescifrado = Encriptacion.desencriptar(mensajeCifrado, claveAES);
+                    System.out.println("Mensaje recibido: " + mensajeDescifrado);
                 }
             }
-        } catch (IOException e) {
+        } catch (IOException | NoSuchAlgorithmException | InvalidKeyException e) {
             // Capturar excepciones de entrada/salida
             e.printStackTrace();
+        } catch (NoSuchPaddingException e) {
+            throw new RuntimeException(e);
+        } catch (IllegalBlockSizeException e) {
+            throw new RuntimeException(e);
+        } catch (BadPaddingException e) {
+            throw new RuntimeException(e);
         } finally {
             // Cerrar el socket al finalizar la ejecución del servidor
             if (socket != null && !socket.isClosed()) {
@@ -50,20 +63,9 @@ public class ServidorUDP {
         }
     }
 
-    // Método para retransmitir un mensaje a todos los clientes
-    private static void enviarMensajeCliente(DatagramSocket socket, String mensaje, Map<InetSocketAddress, String> clientesConectados) throws IOException {
-        byte[] sendData = mensaje.getBytes();
-        for (InetSocketAddress cliente : clientesConectados.keySet()) {
-            try {
-                DatagramPacket sendPacket = new DatagramPacket(sendData, sendData.length, cliente.getAddress(), cliente.getPort());
-                socket.send(sendPacket);
-            } catch (SocketException e) {
-                // Cliente desconectado, eliminarlo de la lista y notificar a los demás clientes
-                String mensajeDesconexion = "¡" + clientesConectados.get(cliente) + " se ha desconectado!";
-                System.out.println(mensajeDesconexion);
-                clientesConectados.remove(cliente);
-                enviarMensajeCliente(socket, mensajeDesconexion, clientesConectados);
-            }
-        }
+    // Método para recibir la clave AES del cliente
+    private static SecretKey recibirClave(DatagramSocket socket, String mensajeCifrado) throws IOException, NoSuchAlgorithmException, InvalidKeyException {
+        byte[] claveBytes = mensajeCifrado.getBytes();
+        return new SecretKeySpec(claveBytes, 0, claveBytes.length, "AES");
     }
 }
